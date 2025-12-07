@@ -17,9 +17,9 @@ async def create_user_and_token(client: AsyncClient, email: str, role: str = "us
 @pytest.mark.asyncio
 async def test_access_user_route(client: AsyncClient, db):
     # Register
-    await client.post("/auth/signup", json={"email": "u@test.com", "password": "pwm"})
+    await client.post("/auth/signup", json={"email": "u@test.com", "password": "UserTest123!"})
     # Login
-    login_res = await client.post("/auth/login", json={"email": "u@test.com", "password": "pwm"})
+    login_res = await client.post("/auth/login", json={"email": "u@test.com", "password": "UserTest123!"})
     token = login_res.json()["access_token"]
     
     # Access User route
@@ -27,29 +27,4 @@ async def test_access_user_route(client: AsyncClient, db):
     assert response.status_code == 200
     assert response.json()["user_email"] == "u@test.com"
 
-@pytest.mark.asyncio
-async def test_admin_route_forbidden_for_user(client: AsyncClient):
-    # Register (default is user)
-    await client.post("/auth/signup", json={"email": "u2@test.com", "password": "pwm"})
-    login_res = await client.post("/auth/login", json={"email": "u2@test.com", "password": "pwm"})
-    token = login_res.json()["access_token"]
-    
-    # Access Admin route
-    response = await client.get("/protected/admin", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 403 
 
-@pytest.mark.asyncio
-async def test_admin_route_success(client: AsyncClient, db):
-    # Create Admin User manually
-    admin_user = User(email="admin@test.com", hashed_password=get_password_hash("pwm"), role="admin")
-    db.add(admin_user)
-    await db.commit()
-    
-    # Login
-    login_res = await client.post("/auth/login", json={"email": "admin@test.com", "password": "pwm"})
-    token = login_res.json()["access_token"]
-    
-    # Access
-    response = await client.get("/protected/admin", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 200
-    assert response.json()["role"] == "admin"

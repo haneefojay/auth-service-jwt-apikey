@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr
+from uuid import UUID
 from datetime import datetime
 from typing import Optional
 
@@ -6,16 +7,16 @@ from typing import Optional
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    role: Optional[str] = "user"
+
 
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
 class UserResponse(BaseModel):
-    id: int
+    id: UUID
     email: str
-    role: str
+
     is_active: bool
     created_at: datetime
     
@@ -30,21 +31,20 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
-    role: Optional[str] = None
+
 
 # API Key Schemas
 class APIKeyCreate(BaseModel):
     name: Optional[str] = None
     expires_in_days: Optional[int] = None
-    scopes: Optional[str] = ""
+
 
 class APIKeyResponse(BaseModel):
-    id: int
+    id: UUID
     key: str
     name: Optional[str]
-    user_id: int
+    user_id: UUID
     is_active: bool
-    scopes: str
     expires_at: Optional[datetime]
     created_at: datetime
     
@@ -52,10 +52,20 @@ class APIKeyResponse(BaseModel):
         from_attributes = True
 
 class APIKeyList(BaseModel):
-    id: int
+    id: UUID
     name: Optional[str]
     is_active: bool
-    scopes: str
+    expires_at: Optional[datetime]
+    created_at: datetime
+    revoked_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+class APIKeyRevoke(BaseModel):
+    id: UUID
+    name: Optional[str]
+    is_active: bool = False
     expires_at: Optional[datetime]
     created_at: datetime
     revoked_at: Optional[datetime]

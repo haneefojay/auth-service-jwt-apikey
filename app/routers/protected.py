@@ -18,50 +18,32 @@ async def user_only_route(
     # Since limiter is on app.state, using dependency injection for it is cleaner, but for now
     # we demonstrate just the auth parts.
     
-    user, auth_type, scopes = current_user_data
+    user, auth_type = current_user_data
     logger.info(f"User {user.email} accessed user-only route via {auth_type}")
     
     return {
         "message": "This is a protected route",
         "user_email": user.email,
         "auth_type": auth_type,
-        "scopes": scopes,
-        "role": user.role,
+
         "access_level": "user"
     }
 
-@router.get("/service-only", dependencies=[Depends(auth.require_scope("read"))])
+@router.get("/service-only", dependencies=[Depends(auth.require_service_access)])
 async def service_only_route(
     current_user_data: tuple = Depends(auth.get_current_user)
 ):
     """
     Example service-only route
-    REQUIRES 'read' scope in API key
+    REQUIRES API Key access
     """
-    user, auth_type, scopes = current_user_data
+    user, auth_type = current_user_data
     
     return {
-        "message": "You have read access",
+        "message": "You have service access",
         "user_email": user.email,
         "auth_type": auth_type,
-        "scopes": scopes,
         "access_level": "service",
-        "note": "Accessed with valid scope: read"
+        "note": "Accessed via API Key"
     }
 
-@router.get("/admin", dependencies=[Depends(auth.check_admin)])
-async def admin_route(
-    current_user_data: tuple = Depends(auth.get_current_user)
-):
-    """
-    Example admin route - REQUIRES 'admin' role
-    """
-    user, auth_type, scopes = current_user_data
-    
-    return {
-        "message": "This is an admin route",
-        "user_email": user.email,
-        "auth_type": auth_type,
-        "role": user.role,
-        "access_level": "admin"
-    }

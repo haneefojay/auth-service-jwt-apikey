@@ -1,18 +1,31 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from .. import models, schemas, auth
 from ..database import get_db
 from ..config import settings
+from ..utils import validate_password
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+limiter = Limiter(key_func=get_remote_address, enabled=not settings.TESTING)
 
 @router.post("/signup", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
-async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/hour")
+async def signup(request: Request, user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     """
     Register a new user
     """
+    # Validate password policy
+    password_error = validate_password(user.password)
+    if password_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=password_error
+        )
+    
     # Check if user already exists
     result = await db.execute(select(models.User).filter(models.User.email == user.email))
     db_user = result.scalar_one_or_none()
@@ -25,13 +38,9 @@ async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     
     # Create new user
     hashed_password = auth.get_password_hash(user.password)
-    # Simple default role assignment logic
-    role = user.role if user.role in ["admin", "user"] else "user"
-    
     new_user = models.User(
         email=user.email,
-        hashed_password=hashed_password,
-        role=role
+        hashed_password=hashed_password
     )
     
     db.add(new_user)
@@ -41,7 +50,8 @@ async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     return new_user
 
 @router.post("/login", response_model=schemas.Token)
-async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, user_credentials: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
     """
     Login and get JWT token + Refresh Token
     """
@@ -57,7 +67,7 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
     # Access Token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = auth.create_access_token(
-        data={"sub": user.email, "role": user.role}, expires_delta=access_token_expires
+        data={"sub": user.email}, expires_delta=access_token_expires
     )
     
     # Refresh Token
@@ -77,7 +87,9 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
     }
 
 @router.post("/refresh", response_model=schemas.Token)
+@limiter.limit("20/hour")
 async def refresh_token(
+    request: Request,
     refresh_token: str, 
     db: AsyncSession = Depends(get_db)
 ):
@@ -120,14 +132,14 @@ async def refresh_token(
     
     # Store user data before commit expires the object
     user_email = user.email
-    user_role = user.role
+
     
     await db.commit()
     
     # New Access Token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = auth.create_access_token(
-        data={"sub": user_email, "role": user_role}, expires_delta=access_token_expires
+        data={"sub": user_email}, expires_delta=access_token_expires
     )
     
     return {
@@ -143,5 +155,5 @@ async def get_current_user_info(
     """
     Get current user information (works with both JWT and API key)
     """
-    user, auth_type, scopes = current_user_data
+    user, auth_type = current_user_data
     return user

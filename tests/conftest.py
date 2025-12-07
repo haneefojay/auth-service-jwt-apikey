@@ -1,9 +1,13 @@
 import pytest
 import asyncio
+import os
 from typing import AsyncGenerator, Generator
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
+
+# Set TESTING flag to disable rate limiting
+os.environ["TESTING"] = "true"
 
 from app.main import app
 from app.database import get_db, Base

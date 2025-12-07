@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Union
 from jose import JWTError, jwt
 # from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status, Security
@@ -9,12 +9,16 @@ from sqlalchemy import select
 from .config import settings
 from .database import get_db
 from . import models, schemas
+from .utils import hash_api_key
 
 import bcrypt
 import secrets
 
 # pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+
+# Define two separate security schemes matching the OpenAPI schema
+jwt_bearer = HTTPBearer(scheme_name="JWTBearer")
+api_key_bearer = HTTPBearer(scheme_name="APIKeyBearer")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     # return pwd_context.verify(plain_password, hashed_password)
@@ -43,7 +47,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def create_refresh_token(user_id: int) -> str:
+from uuid import UUID
+
+def create_refresh_token(user_id: UUID) -> str:
     timestamp = datetime.utcnow().isoformat()
     return f"rt_{secrets.token_urlsafe(32)}_{timestamp}"
 
@@ -57,7 +63,7 @@ async def authenticate_user(db: AsyncSession, email: str, password: str):
     return user
 
 async def get_current_user_from_token(
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    credentials: HTTPAuthorizationCredentials = Security(jwt_bearer),
     db: AsyncSession = Depends(get_db)
 ) -> models.User:
     credentials_exception = HTTPException(
@@ -84,9 +90,9 @@ async def get_current_user_from_token(
     return user
 
 async def get_current_user_from_api_key(
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    credentials: HTTPAuthorizationCredentials = Security(api_key_bearer),
     db: AsyncSession = Depends(get_db)
-) -> tuple[models.User, list[str]]:
+) -> models.User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid API key",
@@ -101,7 +107,7 @@ async def get_current_user_from_api_key(
     
     result = await db.execute(
         select(models.APIKey).filter(
-            models.APIKey.key == api_key_value,
+            models.APIKey.key == hash_api_key(api_key_value),
             models.APIKey.is_active == True
         )
     )
@@ -122,57 +128,47 @@ async def get_current_user_from_api_key(
     if not user:
         raise credentials_exception
     
-    scopes = key_record.scopes.split(',') if key_record.scopes else []
-    return user, scopes
+    return user
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    credentials: HTTPAuthorizationCredentials = Security(jwt_bearer),
     db: AsyncSession = Depends(get_db)
-) -> tuple[models.User, str, list[str]]:
+) -> tuple[models.User, str]:
     """
-    Returns (user, auth_type, scopes)
+    Returns (user, auth_type)
     auth_type is 'jwt' or 'api_key'
-    scopes is list of permission strings (empty for JWT currently implies full access or handled differently)
+    
+    Accepts either:
+    - JWT Bearer Token (from /auth/login)
+    - API Key (starts with sk_, from /keys/create)
     """
     token = credentials.credentials
     
     # Try API key first (if starts with sk_)
     if token.startswith('sk_'):
         try:
-            user, scopes = await get_current_user_from_api_key(credentials, db)
-            return user, "api_key", scopes
+            user = await get_current_user_from_api_key(credentials, db)
+            return user, "api_key"
         except HTTPException:
             raise
     
     # Try JWT token
     try:
         user = await get_current_user_from_token(credentials, db)
-        # JWT users implicitly have all scopes for now, or you could add scopes to JWT
-        return user, "jwt", ["*"] 
+        return user, "jwt"
     except HTTPException:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
+            detail="Invalid authentication credentials. Provide either a valid JWT token or API key."
         )
 
-def check_admin(current_user_data: tuple = Depends(get_current_user)):
-    user, auth_type, scopes = current_user_data
-    if user.role != "admin":
+
+
+def require_service_access(current_user_data: tuple = Depends(get_current_user)):
+    user, auth_type = current_user_data
+    if auth_type != "api_key":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required"
+            detail="Service access required (API Key)"
         )
     return user
-
-def require_scope(scope: str):
-    def scope_checker(current_user_data: tuple = Depends(get_current_user)):
-        user, auth_type, scopes = current_user_data
-        if "*" in scopes:
-            return user
-        if scope not in scopes:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing required scope: {scope}"
-            )
-        return user
-    return scope_checker
